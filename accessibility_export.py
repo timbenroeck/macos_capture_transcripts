@@ -36,7 +36,6 @@ APP_CONTEXTS = {
         "window_title": "Transcript",
         "default_serialization_preset_name": "Zoom Transcript Table"
     },
-    # --- NEW PRESET ---
     "Teams in Browser (Chrome/Prisma)": {
         "app_label": "TeamsInBrowser", # Will be refined based on actual browser found
         "find_method": "specific_pids_containing_window",
@@ -44,7 +43,7 @@ APP_CONTEXTS = {
             "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
             "/Applications/Prisma Access Browser.app/Contents/MacOS/Prisma Access Browser"
         ],
-        "window_title_fragment": "Teams", # Case-insensitive search term
+        "window_title_fragment": "teams", # Case-insensitive search term
         "default_serialization_preset_name": "Teams Live Captions Group"
     },
     # --- Manual Options ---
@@ -698,6 +697,37 @@ def run_periodic_export(pid, context_config, serialization_config, depth, interv
 
 # --- Main Function (Unchanged structure, just needs to handle new context) ---
 def main():
+    # --- ASCII Art Intro ---
+    print(r"""
+
+               @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+          @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+        @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+      @@@@@@@@@                               @@@@@@@@@
+     @@@@@@                                       @@@@@@
+   @@@@                                              @@@@@
+   @@@@           @@@@@@@@@@@@@@@@@@@@@@@@@           @@@@
+   @@@@           @@@@@@@@@@@@@@@@@@@@@@@@@           @@@@
+   @@@@            @@@@@@@@@@@@@@@@@@@@@@@            @@@@
+   @@@@                                               @@@@
+                  @@@@@@@@@@@@@@@@@@                  @@@@
+                  @@@@@@@@@@@@@@@@@@@                 @@@@
+                   @@@@@@@@@@@@@@@@                   @@@@
+                                                     @@@@@
+     @@@@@@@                                     @@@@@@@
+      @@@@@@@@                                 @@@@@@@@
+        @@@@@@@@@@@@@@@@@@         @@@@@@@@@@@@@@@@@@
+           @@@@@@@@@@@@@@@@       @@@@@@@@@@@@@@@@
+                  @@@@@@@@@@@   @@@@@@@@@@@
+                        @@@@@@ @@@@@@
+                         @@@@@@@@@@@
+                          @@@@@@@@@
+                            @@@@@
+
+       macOS Accessibility Export and Transcript Conversion Tools
+    """)
+    # --- End ASCII Art ---
+
     # --- Argument Parsing for Verbosity ---
     parser = argparse.ArgumentParser(description="macOS Accessibility Tree Export Tool")
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose/debug output')
@@ -707,7 +737,6 @@ def main():
         print("--- Verbose Mode Enabled ---")
 
     if not AXIsProcessTrusted():
-        # ... (permission message) ...
         print("\n" + "="*60)
         print(" Accessibility Permissions Required ".center(60, "="))
         print("\nThis script requires Accessibility permissions to inspect UI elements.")
@@ -719,7 +748,7 @@ def main():
         print("="*60)
         return
 
-    print("\n=== Accessibility Tree Export Tool ===")
+    # print("\n=== Accessibility Tree Export Tool ===") # Replaced by ASCII art
 
     initial_element = None
     app_label = "UnknownApp"
@@ -730,16 +759,50 @@ def main():
     # --- Stage 1: Select App Context & Find Initial Element ---
     while initial_element is None:
         print("\n--- Stage 1: Select Application Context ---")
-        context_keys = list(APP_CONTEXTS.keys())
-        for i, name in enumerate(context_keys):
-            print(f"  [{i}] {name}") # The new context will appear here
+
+        # Separate contexts into presets and manual
+        preset_keys = []
+        manual_keys = []
+        for key, config in APP_CONTEXTS.items():
+            find_method = config.get("find_method", "")
+            if find_method.startswith("manual_"):
+                manual_keys.append(key)
+            else:
+                preset_keys.append(key)
+
+        # Build the ordered list for selection and display menu
+        all_options_keys = [] # Stores the keys in the order they are presented
+        current_index = 0
+
+        print("--- Presets ---")
+        if preset_keys:
+            for key in preset_keys:
+                print(f"  [{current_index}] {key}")
+                all_options_keys.append(key)
+                current_index += 1
+        else:
+            print("  (No presets defined)")
+
+        print("\n--- Manual Options ---")
+        if manual_keys:
+            for key in manual_keys:
+                print(f"  [{current_index}] {key}")
+                all_options_keys.append(key)
+                current_index += 1
+        else:
+             print("  (No manual options defined)")
+
+        print("--------------------")
         print("  [q] Quit")
 
         choice = input("\nEnter your choice: ").strip().lower()
-        if choice == 'q': print("Exiting."); return
+        if choice == 'q':
+            print("Exiting.")
+            return
 
-        if choice.isdigit() and 0 <= int(choice) < len(context_keys):
-            chosen_context_name = context_keys[int(choice)]
+        if choice.isdigit() and 0 <= int(choice) < len(all_options_keys):
+            chosen_index = int(choice)
+            chosen_context_name = all_options_keys[chosen_index] # Get key from the ordered list
             context_config = APP_CONTEXTS[chosen_context_name]
             print(f"\nSelected Context: {chosen_context_name}. Attempting to find element...")
             # Pass args to the function
@@ -747,18 +810,18 @@ def main():
 
             if initial_element is None:
                  print("❌ Failed to find the initial App/Window element for this context.")
-                 pid = None
+                 pid = None # Reset PID if finding failed
                  verbose_print(args, "DEBUG: get_initial_element_from_context returned None for initial_element.")
             else:
                  verbose_print(args, f"DEBUG: Found initial element. PID={pid}, AppLabel='{app_label}'")
-                 # Store the potentially refined app_label back into the config for the periodic export?
-                 # This helps if the periodic export needs the specific browser name.
-                 context_config['app_label'] = app_label # Update context_config in memory
+                 # Update context_config in memory with potentially refined app_label
+                 context_config['app_label'] = app_label
 
         else:
             print("❌ Invalid choice.")
 
     # --- Stage 2: Select Serialization Preset ---
+    # (No changes needed from here downwards for this request)
     selected_serialization_config = None
     serialization_name = ""
     # Use the potentially updated context_config which might have a refined app_label
@@ -843,7 +906,10 @@ def main():
 
     # --- Stage 4: Create Base Directory and Execute Export ---
     parent_timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-    base_export_dir = f"exports/export_{parent_timestamp}"
+    # Use the app_label determined during context selection for a more descriptive directory
+    # Replace spaces/special chars in app_label for filesystem safety
+    safe_app_label = "".join(c if c.isalnum() else "_" for c in app_label)
+    base_export_dir = f"exports/{safe_app_label}_{parent_timestamp}" # Incorporate app label
     try:
         os.makedirs(base_export_dir, exist_ok=True)
         print(f"\n--- Creating Base Export Directory ---")
@@ -855,6 +921,7 @@ def main():
 
     # Use the potentially updated app_label from context_config
     print("\n--- Starting Export ---")
+    # Use the original chosen_context_name for user display, but the refined context_config['app_label'] for details
     print(f"App Context: {chosen_context_name} (Label: {context_config['app_label']}, PID: {pid})")
     print(f"Serialization Target: {serialization_name}")
     print(f"Max Depth: {depth}")
