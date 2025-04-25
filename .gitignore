@@ -2,6 +2,8 @@
 exports/
 converted_transcripts/
 
+.DS_Store
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
