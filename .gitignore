@@ -1,6 +1,6 @@
 # accessibility_export specific
 exports/
-converted_transcripts/
+processed_transcripts/
 
 .DS_Store
 

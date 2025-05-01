@@ -7,25 +7,62 @@ import glob
 from difflib import SequenceMatcher
 
 # --- Configuration ---
-OUTPUT_BASE_DIR = "converted_transcripts"
+OUTPUT_BASE_DIR = "processed_transcripts"
 # How many items from the end of the previous transcript part list to check
 # against the current part list for overlap detection.
 OVERLAP_LOOKBACK_PREVIOUS = 30
 # Minimum number of consecutive matching (speaker, text) tuples required
 # to confirm an overlap between sequential files. Adjust if needed.
 MIN_OVERLAP_LENGTH = 3
-# Set to True for detailed print statements during overlap detection
-DEBUG_OVERLAP = False
+# Set to True for detailed print statements during overlap detection and node finding
+DEBUG_MODE = False # Combined debug flag
 
 # --- Core Processing Functions ---
 
-def find_transcript_parts_teams(node):
+def find_live_captions_group(node):
     """
-    Recursively searches the Teams JSON data structure for transcript parts
-    (speaker and text). Normalizes whitespace in the extracted text.
+    Recursively searches the JSON data structure for the specific AXGroup
+    node that contains the live captions.
 
     Args:
         node: The current node (dict or list) in the JSON structure.
+
+    Returns:
+        dict | None: The dictionary representing the "Live Captions" AXGroup
+                     if found, otherwise None.
+    """
+    if isinstance(node, dict):
+        # Check if this node is the target "Live Captions" group
+        if (node.get("role") == "AXGroup" and
+            node.get("description") == "Live Captions"):
+            if DEBUG_MODE: print("  Found 'Live Captions' AXGroup.")
+            return node
+
+        # If not the target, search its children recursively
+        if "children" in node:
+            for child in node.get("children", []):
+                found_node = find_live_captions_group(child)
+                if found_node:
+                    return found_node # Return immediately if found in a child
+
+    elif isinstance(node, list):
+        # If it's a list, search each item in the list
+        for item in node:
+            found_node = find_live_captions_group(item)
+            if found_node:
+                return found_node # Return immediately if found in an item
+
+    return None # Target node not found in this branch
+
+
+def _extract_speaker_text_pairs(node):
+    """
+    Recursively searches a specific subtree (expected to be the children
+    of the 'Live Captions' group) for transcript parts (speaker and text).
+    Normalizes whitespace in the extracted text.
+
+    Args:
+        node: The current node (dict or list) within the Live Captions subtree.
 
     Returns:
         list: A list of (speaker, text) tuples found under this node.
@@ -33,43 +70,99 @@ def find_transcript_parts_teams(node):
     parts = []
     if isinstance(node, dict):
         # Specific structure indicating a speaker and their text in Teams JSON
+        # This structure appears *within* the Live Captions group's children
+        # Example Path within Live Captions: AXGroup -> AXList -> AXGroup -> AXGroup(speaker)/AXStaticText(text)
         if (node.get("role") == "AXGroup" and
                 len(node.get("children", [])) == 2):
             child1 = node["children"][0]
             child2 = node["children"][1]
+
             is_speaker_group = (
                 isinstance(child1, dict) and
                 child1.get("role") == "AXGroup" and
-                len(child1.get("children", [])) == 1 and
+                len(child1.get("children", [])) == 1 and # Contains the speaker text
                 isinstance(child1["children"][0], dict) and
                 child1["children"][0].get("role") == "AXStaticText" and
                 "value" in child1["children"][0]
             )
+            # Sometimes the speaker name AXStaticText might be nested deeper
+            # Let's add a helper function to find the first AXStaticText value
+            def find_first_static_text(sub_node):
+                 if isinstance(sub_node, dict):
+                    if sub_node.get("role") == "AXStaticText" and "value" in sub_node:
+                        return sub_node["value"]
+                    if "children" in sub_node:
+                        for sub_child in sub_node.get("children", []):
+                             found = find_first_static_text(sub_child)
+                             if found is not None: return found
+                 elif isinstance(sub_node, list):
+                     for item in sub_node:
+                        found = find_first_static_text(item)
+                        if found is not None: return found
+                 return None
+
             is_text_element = (
                 isinstance(child2, dict) and
                 child2.get("role") == "AXStaticText" and
                 "value" in child2
             )
+
             if is_speaker_group and is_text_element:
-                speaker = child1["children"][0]["value"]
+                speaker_text_node = child1["children"][0]
+                # Use the helper to be robust to nesting variations for speaker
+                speaker = find_first_static_text(speaker_text_node)
+                if speaker is None: # Fallback if helper fails (shouldn't usually)
+                    speaker = speaker_text_node.get("value", "Unknown Speaker")
+
                 text = child2["value"]
                 text = ' '.join(text.split()) # Normalize whitespace
-                if text: # Only add if text is not empty after normalization
-                    # Clean speaker name (remove potential trailing indicators like '(Guest)')
-                    processed_speaker = re.sub(r'\s*\(.*\)\s*$', '', speaker).strip()
-                    parts.append((processed_speaker, text))
-                # Stop searching deeper within this matched structure
-                return parts
 
-        # Recursively search children if not the target structure
+                if text: # Only add if text is not empty after normalization
+                    # Clean speaker name (remove potential trailing indicators like '(Guest)', '(Unverified)')
+                    processed_speaker = re.sub(r'\s*\(.*\)\s*$', '', speaker).strip()
+                    if not processed_speaker: processed_speaker = "Unknown Speaker" # Handle empty speaker after cleaning
+                    parts.append((processed_speaker, text))
+                    if DEBUG_MODE: print(f"    Extracted: [{processed_speaker}] {text}")
+                # Stop searching deeper within this matched structure
+                return parts # Return immediately once a pair is found at this level
+
+        # Recursively search children if not the target structure *or* if it's a container like AXList
         if "children" in node:
             for child in node.get("children", []):
-                parts.extend(find_transcript_parts_teams(child))
+                parts.extend(_extract_speaker_text_pairs(child))
+
     elif isinstance(node, list):
         # Recursively search items in a list
         for item in node:
-            parts.extend(find_transcript_parts_teams(item))
+            parts.extend(_extract_speaker_text_pairs(item))
+
     return parts
+
+# --- New Wrapper Function ---
+def find_transcript_parts_teams_robust(root_node):
+    """
+    Finds transcript parts by first locating the 'Live Captions' group
+    and then searching within it.
+
+    Args:
+        root_node: The root node of the Teams JSON data.
+
+    Returns:
+        list: A list of (speaker, text) tuples found, or empty list if
+              'Live Captions' group not found or no parts within it.
+    """
+    if DEBUG_MODE: print("Searching for 'Live Captions' AXGroup...")
+    live_captions_group = find_live_captions_group(root_node)
+
+    if live_captions_group:
+        if DEBUG_MODE: print("  'Live Captions' group found. Extracting speaker/text pairs within it...")
+        # Pass the children of the found group, as the speaker/text pairs are nested within
+        return _extract_speaker_text_pairs(live_captions_group.get("children", []))
+    else:
+        if DEBUG_MODE: print("  'Live Captions' AXGroup not found in this file.")
+        return []
+
+# --- Timestamp and Overlap Functions (Unchanged) ---
 
 def get_timestamp_from_filename(filename):
     """
@@ -81,7 +174,7 @@ def get_timestamp_from_filename(filename):
 
     Returns:
         datetime.datetime | None: The extracted timestamp, or None if not found
-                                   or not parsable.
+                                  or not parsable.
     """
     # Regex to find the timestamp pattern
     match = re.search(r"(\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2})", filename)
@@ -90,9 +183,9 @@ def get_timestamp_from_filename(filename):
             ts_str = match.group(1)
             return datetime.datetime.strptime(ts_str, "%Y-%m-%d-%H-%M-%S")
         except ValueError:
-            if DEBUG_OVERLAP: print(f"Warning: Could not parse timestamp from '{ts_str}' in {filename}")
+            if DEBUG_MODE: print(f"Warning: Could not parse timestamp from '{ts_str}' in {filename}")
             return None
-    if DEBUG_OVERLAP: print(f"Warning: Could not find timestamp pattern in filename {filename}")
+    if DEBUG_MODE: print(f"Warning: Could not find timestamp pattern in filename {filename}")
     return None
 
 def find_best_overlap_index(previous_parts, current_parts, lookback_prev, min_len):
@@ -131,7 +224,7 @@ def find_best_overlap_index(previous_parts, current_parts, lookback_prev, min_le
     # Find the longest matching block within the specified ranges
     match = matcher.find_longest_match(0, len(prev_slice), 0, len(curr_slice))
 
-    if DEBUG_OVERLAP:
+    if DEBUG_MODE:
         print(f"\n  Overlap Check (SequenceMatcher):")
         print(f"    Comparing last {len(prev_slice)} of prev ({len_prev} total) with {len(curr_slice)} of current.")
         print(f"    Longest match details: prev_idx={match.a}, curr_idx={match.b}, size={match.size}")
@@ -145,14 +238,14 @@ def find_best_overlap_index(previous_parts, current_parts, lookback_prev, min_le
         # If a good match is found, assume the new content starts right after
         # this match ends *in the current_parts list*.
         new_content_start_index = match.b + match.size
-        if DEBUG_OVERLAP:
+        if DEBUG_MODE:
             print(f"  ----> Valid overlap confirmed. Size: {match.size}. New content starts at index {new_content_start_index} in current_parts.")
         # Ensure index doesn't exceed current_parts length (shouldn't happen with find_longest_match logic)
         return min(new_content_start_index, len_curr)
     else:
         # No sufficiently long common subsequence found. Assume no overlap.
-        if DEBUG_OVERLAP:
-             print(f"  ----> No significant overlap found. Longest match ({match.size}) < min_len ({min_len}). Treating all current parts as new.")
+        if DEBUG_MODE:
+            print(f"  ----> No significant overlap found. Longest match ({match.size}) < min_len ({min_len}). Treating all current parts as new.")
         return 0 # Return 0 to indicate all of current_parts is new
 
 
@@ -258,27 +351,31 @@ def process_teams_directory(input_dir_path):
         # Print progress message, overwriting previous one
         print(progress_msg + " " * (last_progress_msg_len - len(progress_msg)), end='\r', flush=True)
         last_progress_msg_len = len(progress_msg)
-        if DEBUG_OVERLAP: print(f"\n{progress_msg}") # Print clearly on new line in debug mode
+        if DEBUG_MODE: print(f"\n{progress_msg}") # Print clearly on new line in debug mode
 
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            current_parts = find_transcript_parts_teams(data)
+
+            # *** Use the new robust function here ***
+            current_parts = find_transcript_parts_teams_robust(data)
+
             if not current_parts:
-                 if DEBUG_OVERLAP: print("  No transcript parts found in this file.")
-                 continue # Skip empty files
+                 if DEBUG_MODE: print("  No transcript parts found or extracted in this file.")
+                 continue # Skip files where no parts were found/extracted
 
         except json.JSONDecodeError as e:
+            # Print warning on a new line so it doesn't get overwritten by progress
             print(f"\nWarning: Skipping file {os.path.basename(file_path)} due to JSON decode error: {e}")
             continue
         except Exception as e:
             # Print warning on a new line so it doesn't get overwritten by progress
             print(f"\nWarning: Skipping file {os.path.basename(file_path)} due to read/parse error: {e}")
-            continue
+            continue # Continue with the next file
 
         if not all_transcript_parts: # This is the first file with content
             all_transcript_parts.extend(current_parts)
-            if DEBUG_OVERLAP: print(f"  Added {len(current_parts)} parts from the first file.")
+            if DEBUG_MODE: print(f"  Added {len(current_parts)} parts from the first file with content.")
         else:
             # Find where new content starts in current_parts based on overlap with the end of all_transcript_parts
             new_content_start_idx = find_best_overlap_index(
@@ -292,10 +389,10 @@ def process_teams_directory(input_dir_path):
             if new_content_start_idx < len(current_parts):
                 new_parts_to_add = current_parts[new_content_start_idx:]
                 all_transcript_parts.extend(new_parts_to_add)
-                if DEBUG_OVERLAP: print(f"  Overlap detected. Added {len(new_parts_to_add)} new parts (from index {new_content_start_idx}).")
-            elif DEBUG_OVERLAP:
+                if DEBUG_MODE: print(f"  Overlap handled. Added {len(new_parts_to_add)} new parts (from index {new_content_start_idx}). Total parts now: {len(all_transcript_parts)}")
+            elif DEBUG_MODE:
                 # This means the heuristic determined the entire current file overlapped
-                 print(f"  All {len(current_parts)} items considered overlap (start index {new_content_start_idx}). Nothing new added.")
+                print(f"  All {len(current_parts)} items considered overlap (start index {new_content_start_idx}). Nothing new added.")
 
     # Clear the final progress indicator line before printing summary
     print(" " * last_progress_msg_len, end='\r')
@@ -305,9 +402,12 @@ def process_teams_directory(input_dir_path):
     if not all_transcript_parts:
         print("Warning: No transcript content found after processing all files.")
         # Write an empty file
-        with open(output_file_path, "w", encoding="utf-8") as f:
-             f.write("")
-        print(f"Empty transcript file written to {output_file_path}")
+        try:
+            with open(output_file_path, "w", encoding="utf-8") as f:
+                f.write("")
+            print(f"Empty transcript file written to {output_file_path}")
+        except IOError as e:
+            print(f"An error occurred while writing the empty output file '{output_file_path}': {e}")
         return # Exit gracefully
 
     # Format the combined transcript
@@ -316,7 +416,7 @@ def process_teams_directory(input_dir_path):
     # Write the final output
     try:
         with open(output_file_path, "w", encoding="utf-8") as f:
-             f.write(formatted_output)
+            f.write(formatted_output)
         print(f"Combined transcript successfully written to {output_file_path}")
     except IOError as e:
         print(f"An error occurred while writing the output file '{output_file_path}': {e}")
@@ -330,4 +430,6 @@ if __name__ == "__main__":
         sys.exit(1)
 
     input_directory = sys.argv[1]
+    # Optional: Enable debug mode for detailed output
+    # DEBUG_MODE = True
     process_teams_directory(input_directory)

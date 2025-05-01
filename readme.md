@@ -137,9 +137,9 @@ Once you have generated the JSON accessibility export using `accessibility_expor
 
 ### Output Directory Structure
 
-Both conversion scripts will create an output directory named `converted_transcripts` in the **same directory where you run the conversion script**. The converted text files will be placed inside this directory.
+Both conversion scripts will create an output directory named `processed_transcripts` in the **same directory where you run the conversion script**. The converted text files will be placed inside this directory.
 
-* **Output Location:** `./converted_transcripts/`
+* **Output Location:** `./processed_transcripts/`
 * **Output Filename:** The name of the output `.txt` file will be based on the input filename (for Zoom) or the input directory name (for Teams).
 
 ### `process_zoom_transcript.py`
@@ -163,8 +163,8 @@ Replace the path with the actual path to **one** of your Zoom export JSON files.
 
 #### Output
 
-* A `.txt` file will be created inside the `./converted_transcripts/` directory.
-* The filename will match the input JSON file's name (e.g., `./converted_transcripts/export_export_2025-04-25-10-35-00.txt`).
+* A `.txt` file will be created inside the `./processed_transcripts/` directory.
+* The filename will match the input JSON file's name (e.g., `./processed_transcripts/export_export_2025-04-25-10-35-00.txt`).
 * The format includes the speaker, timestamp, and dialogue:
     ```
     [Speaker Name] HH:MM:SS
@@ -197,8 +197,8 @@ Replace the path with the actual path to the **directory** containing your Teams
 
 #### Output
 
-* A single `.txt` file will be created inside the `./converted_transcripts/` directory.
-* The filename will be based on the name of the input directory (e.g., `./converted_transcripts/export_2025-04-25-10-45-15.txt`).
+* A single `.txt` file will be created inside the `./processed_transcripts/` directory.
+* The filename will be based on the name of the input directory (e.g., `./processed_transcripts/export_2025-04-25-10-45-15.txt`).
 * The format includes the speaker and their combined dialogue, merging consecutive messages:
     ```
     [Speaker Name]

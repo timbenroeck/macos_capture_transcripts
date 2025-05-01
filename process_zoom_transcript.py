@@ -3,7 +3,7 @@ import sys
 import os
 
 # --- Configuration ---
-OUTPUT_BASE_DIR = "converted_transcripts"
+OUTPUT_BASE_DIR = "processed_transcripts"
 
 # --- Core Processing Functions ---
 
