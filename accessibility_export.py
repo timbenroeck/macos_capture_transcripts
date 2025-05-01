@@ -72,7 +72,7 @@ APP_CONTEXTS = {
             "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
             "/Applications/Prisma Access Browser.app/Contents/MacOS/Prisma Access Browser"
         ],
-        "window_title_fragment": "teams", # Case-insensitive search term in window title
+        "window_title_fragment": "Microsoft Teams", # Case-insensitive search term in window title
         "default_serialization_preset_name": "Teams Live Captions Group"
     },
     # --- Manual Options ---
